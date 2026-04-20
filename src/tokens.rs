@@ -7,11 +7,13 @@ pub struct Span {
 
 impl Span {
     pub fn new(start: u32, end: u32) -> Self {
-        Self {
-            start: start,
-            end: end,
-        }
+        Self { start, end }
     }
+
+    pub fn is_empty(self) -> bool {
+        self.start == self.end
+    }
+
     pub fn len(self) -> u32 {
         self.end - self.start
     }
@@ -29,19 +31,13 @@ pub struct Token {
 impl Token {
     pub fn new(kind: TokenKind, start: u32, end: u32) -> Self {
         Self {
-            kind: kind,
-            span: Span {
-                start: start,
-                end: end,
-            },
+            kind,
+            span: Span { start, end },
         }
     }
 
     pub fn new_with_span(kind: TokenKind, span: Span) -> Self {
-        Self {
-            kind: kind,
-            span: span,
-        }
+        Self { kind, span }
     }
 }
 
