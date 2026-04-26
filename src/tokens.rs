@@ -15,10 +15,21 @@ impl Span {
     }
 
     pub fn len(self) -> u32 {
+        debug_assert!(self.start <= self.end);
         self.end - self.start
     }
-    pub fn slice<'a>(&self, input: &'a str) -> &'a str {
-        &input[self.start as usize..self.end as usize]
+
+    pub fn as_range(self) -> std::ops::Range<usize> {
+        self.start as usize..self.end as usize
+    }
+
+    pub fn slice<'a>(self, input: &'a str) -> &'a str {
+        let range = self.as_range();
+        debug_assert!(range.start <= range.end);
+        debug_assert!(range.end <= input.len());
+        debug_assert!(input.is_char_boundary(range.start));
+        debug_assert!(input.is_char_boundary(range.end));
+        &input[range]
     }
 }
 
@@ -121,6 +132,8 @@ pub enum TokenKind {
     Ellipsis,
     Exclamation,
 
+    Async,
+    Await,
     False,
     None,
     True,
@@ -165,6 +178,8 @@ impl TokenKind {
             b"False" => Some(Self::False),
             b"None" => Some(Self::None),
             b"True" => Some(Self::True),
+            b"async" => Some(Self::Async),
+            b"await" => Some(Self::Await),
             b"and" => Some(Self::And),
             b"or" => Some(Self::Or),
             b"not" => Some(Self::Not),
@@ -199,32 +214,32 @@ impl TokenKind {
         }
     }
 
-    pub fn from_single_char(c: char) -> Option<Self> {
-        match c {
-            '(' => Some(Self::LeftParen),
-            ')' => Some(Self::RightParen),
-            '[' => Some(Self::LeftBracket),
-            ']' => Some(Self::RightBracket),
-            ':' => Some(Self::Colon),
-            ',' => Some(Self::Comma),
-            ';' => Some(Self::Semicolon),
-            '+' => Some(Self::Plus),
-            '=' => Some(Self::Equal),
-            '-' => Some(Self::Minus),
-            '*' => Some(Self::Star),
-            '/' => Some(Self::Slash),
-            '|' => Some(Self::Pipe),
-            '&' => Some(Self::Ampersand),
-            '<' => Some(Self::Less),
-            '>' => Some(Self::Greater),
-            '.' => Some(Self::Dot),
-            '%' => Some(Self::Percent),
-            '{' => Some(Self::LeftBrace),
-            '}' => Some(Self::RightBrace),
-            '~' => Some(Self::Tilde),
-            '^' => Some(Self::Circumflex),
-            '@' => Some(Self::At),
-            '!' => Some(Self::Exclamation),
+    pub fn from_single_byte(b: u8) -> Option<Self> {
+        match b {
+            b'(' => Some(Self::LeftParen),
+            b')' => Some(Self::RightParen),
+            b'[' => Some(Self::LeftBracket),
+            b']' => Some(Self::RightBracket),
+            b':' => Some(Self::Colon),
+            b',' => Some(Self::Comma),
+            b';' => Some(Self::Semicolon),
+            b'+' => Some(Self::Plus),
+            b'=' => Some(Self::Equal),
+            b'-' => Some(Self::Minus),
+            b'*' => Some(Self::Star),
+            b'/' => Some(Self::Slash),
+            b'|' => Some(Self::Pipe),
+            b'&' => Some(Self::Ampersand),
+            b'<' => Some(Self::Less),
+            b'>' => Some(Self::Greater),
+            b'.' => Some(Self::Dot),
+            b'%' => Some(Self::Percent),
+            b'{' => Some(Self::LeftBrace),
+            b'}' => Some(Self::RightBrace),
+            b'~' => Some(Self::Tilde),
+            b'^' => Some(Self::Circumflex),
+            b'@' => Some(Self::At),
+            b'!' => Some(Self::Exclamation),
             _ => None,
         }
     }
@@ -257,14 +272,16 @@ impl TokenKind {
             [b':', b'=', ..] => Some((Self::ColonEqual, 2)),
             [b'^', b'=', ..] => Some((Self::CircumflexEqual, 2)),
 
-            [c, ..] => Self::from_single_char(*c as char).map(|kind| (kind, 1)),
+            [c, ..] => Self::from_single_byte(*c).map(|kind| (kind, 1)),
             [] => None,
         }
     }
     pub fn is_keyword(self) -> bool {
         matches!(
             self,
-            Self::False
+            Self::Async
+                | Self::Await
+                | Self::False
                 | Self::None
                 | Self::True
                 | Self::And

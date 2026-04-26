@@ -124,7 +124,10 @@ fn captures_inline_comment() {
     assert_eq!(trivia.len(), 1);
     assert_eq!(trivia[0].span.slice(src), "# comment");
     assert_eq!(trivia[0].precedes_token, 3);
-    assert_eq!(tokens[trivia[0].precedes_token as usize].kind, TokenKind::Newline);
+    assert_eq!(
+        tokens[trivia[0].precedes_token as usize].kind,
+        TokenKind::Newline
+    );
 }
 
 #[test]
@@ -136,7 +139,10 @@ fn captures_inline_type_comment() {
     assert_eq!(trivia[0].span.slice(src), "# type: int");
     assert!(!trivia[0].is_type_ignore(src));
     assert!(trivia[0].is_type_comment(src));
-    assert_eq!(tokens[trivia[0].precedes_token as usize].kind, TokenKind::Newline);
+    assert_eq!(
+        tokens[trivia[0].precedes_token as usize].kind,
+        TokenKind::Newline
+    );
 }
 
 #[test]
@@ -147,7 +153,10 @@ fn captures_comment_at_eof() {
     assert_eq!(trivia.len(), 1);
     assert_eq!(trivia[0].span.slice(src), "# comment");
     assert_eq!(trivia[0].precedes_token, 3);
-    assert_eq!(tokens[trivia[0].precedes_token as usize].kind, TokenKind::Eof);
+    assert_eq!(
+        tokens[trivia[0].precedes_token as usize].kind,
+        TokenKind::Eof
+    );
 }
 
 #[test]
@@ -157,7 +166,10 @@ fn captures_comment_before_crlf_newline() {
 
     assert_eq!(trivia.len(), 1);
     assert_eq!(trivia[0].span.slice(src), "# comment");
-    assert_eq!(tokens[trivia[0].precedes_token as usize].kind, TokenKind::Newline);
+    assert_eq!(
+        tokens[trivia[0].precedes_token as usize].kind,
+        TokenKind::Newline
+    );
 }
 
 #[test]

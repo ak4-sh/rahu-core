@@ -467,7 +467,10 @@ impl<'src> Lexer<'src> {
 
     #[inline]
     fn current_char(&self) -> Option<char> {
-        std::str::from_utf8(&self.bytes[self.pos..]).ok()?.chars().next()
+        std::str::from_utf8(&self.bytes[self.pos..])
+            .ok()?
+            .chars()
+            .next()
     }
 
     #[inline]
@@ -489,7 +492,8 @@ impl<'src> Lexer<'src> {
 
     #[inline]
     fn current_starts_identifier(&self) -> bool {
-        self.current_char().is_some_and(|ch| self.is_ident_start(ch))
+        self.current_char()
+            .is_some_and(|ch| self.is_ident_start(ch))
     }
 
     fn scan_identifier_or_keyword(&mut self) -> Token {
