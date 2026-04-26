@@ -466,16 +466,20 @@ impl<'src> Lexer<'src> {
     }
 
     #[inline]
-    fn current_char(&self) -> Option<char> {
-        std::str::from_utf8(&self.bytes[self.pos..])
-            .ok()?
-            .chars()
-            .next()
+    fn current_non_ascii_char(&self) -> Option<char> {
+        debug_assert!(self.pos < self.len);
+        debug_assert!(!self.current().is_ascii());
+
+        unsafe { std::str::from_utf8_unchecked(&self.bytes[self.pos..]).chars().next() }
     }
 
     #[inline]
     fn bump_char(&mut self) -> Option<char> {
-        let ch = self.current_char()?;
+        if self.pos >= self.len {
+            return None;
+        }
+
+        let ch = unsafe { std::str::from_utf8_unchecked(&self.bytes[self.pos..]).chars().next() }?;
         self.pos += ch.len_utf8();
         Some(ch)
     }
@@ -492,32 +496,75 @@ impl<'src> Lexer<'src> {
 
     #[inline]
     fn current_starts_identifier(&self) -> bool {
-        self.current_char()
-            .is_some_and(|ch| self.is_ident_start(ch))
+        let b = self.current();
+        if b.is_ascii() {
+            self.is_ident_start(b as char)
+        } else {
+            self.current_non_ascii_char()
+                .is_some_and(|ch| self.is_ident_start(ch))
+        }
     }
 
     fn scan_identifier_or_keyword(&mut self) -> Token {
         debug_assert!(self.current_starts_identifier());
 
         let start = self.pos as u32;
+        let mut ascii_only = self.current().is_ascii();
 
-        self.bump_char();
-        while let Some(ch) = self.current_char() {
-            if !self.is_ident_continue(ch) {
+        if ascii_only {
+            self.bump();
+            while self.pos < self.len {
+                let b = self.current();
+                if b.is_ascii_alphanumeric() || b == b'_' {
+                    self.bump();
+                    continue;
+                }
+                if b.is_ascii() {
+                    let end = self.pos as u32;
+                    let text = &self.bytes[start as usize..end as usize];
+                    let kind = TokenKind::from_keyword(text).unwrap_or(TokenKind::Name);
+                    return Token::new(kind, start, end);
+                }
+                ascii_only = false;
                 break;
             }
-            self.bump_char();
+
+            if ascii_only {
+                let end = self.pos as u32;
+                let text = &self.bytes[start as usize..end as usize];
+                let kind = TokenKind::from_keyword(text).unwrap_or(TokenKind::Name);
+                return Token::new(kind, start, end);
+            }
+        }
+
+        if !ascii_only {
+            if start == self.pos as u32 {
+                self.bump_char();
+            }
+            while self.pos < self.len {
+                let b = self.current();
+
+                if b.is_ascii() {
+                    if b.is_ascii_alphanumeric() || b == b'_' {
+                        self.bump();
+                        continue;
+                    }
+                    break;
+                }
+
+                let Some(ch) = self.current_non_ascii_char() else {
+                    break;
+                };
+                if !self.is_ident_continue(ch) {
+                    break;
+                }
+                self.pos += ch.len_utf8();
+            }
         }
 
         let end = self.pos as u32;
-        let text = &self.bytes[start as usize..end as usize];
-        let kind = if text.is_ascii() {
-            TokenKind::from_keyword(text).unwrap_or(TokenKind::Name)
-        } else {
-            TokenKind::Name
-        };
 
-        Token::new(kind, start, end)
+        Token::new(TokenKind::Name, start, end)
     }
 
     fn skip_horizontal_ws(&mut self) {
@@ -1212,8 +1259,10 @@ impl<'src> Lexer<'src> {
                 return self.scan_identifier_or_keyword();
             }
 
-            if self.current_starts_identifier() {
-                return self.scan_identifier_or_keyword();
+            if !b.is_ascii() {
+                if self.current_starts_identifier() {
+                    return self.scan_identifier_or_keyword();
+                }
             }
 
             if b.is_ascii_digit() {
@@ -1579,8 +1628,10 @@ impl<'src> Lexer<'src> {
                 return ExprStep::Token(self.scan_identifier_or_keyword());
             }
 
-            if self.current_starts_identifier() {
-                return ExprStep::Token(self.scan_identifier_or_keyword());
+            if !b.is_ascii() {
+                if self.current_starts_identifier() {
+                    return ExprStep::Token(self.scan_identifier_or_keyword());
+                }
             }
 
             if b.is_ascii_digit() {
