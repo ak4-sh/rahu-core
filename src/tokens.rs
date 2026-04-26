@@ -49,7 +49,16 @@ pub enum TokenKind {
     Name,
     Number,
     String,
-    FString,
+    // f-string
+    FStringStart,
+    FStringMiddle,
+    FStringEnd,
+
+    // t-string
+    TStringStart,
+    TStringMiddle,
+    TStringEnd,
+
     BString,
 
     Newline,

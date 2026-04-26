@@ -1,5 +1,5 @@
-use super::Lexer;
-use crate::tokens::TokenKind;
+use super::{LexDiagKind, Lexer, Trivia};
+use crate::tokens::{Token, TokenKind};
 
 fn lex_kinds(src: &str) -> Vec<TokenKind> {
     let mut lexer = Lexer::new(src);
@@ -14,6 +14,64 @@ fn lex_kinds(src: &str) -> Vec<TokenKind> {
     }
 
     kinds
+}
+
+fn lex_tokens(src: &str) -> Vec<Token> {
+    let mut lexer = Lexer::new(src);
+    let mut tokens = Vec::new();
+
+    loop {
+        let tok = lexer.next_token();
+        tokens.push(tok);
+        if tok.kind == TokenKind::Eof {
+            break;
+        }
+    }
+
+    tokens
+}
+
+fn lex_tokens_and_diags(src: &str) -> (Vec<Token>, Vec<LexDiagKind>) {
+    let mut lexer = Lexer::new(src);
+    let mut tokens = Vec::new();
+
+    loop {
+        let tok = lexer.next_token();
+        tokens.push(tok);
+        if tok.kind == TokenKind::Eof {
+            break;
+        }
+    }
+
+    let diags = lexer
+        .take_diagnostics()
+        .into_iter()
+        .map(|diag| diag.kind)
+        .collect();
+
+    (tokens, diags)
+}
+
+fn lex_tokens_trivia_and_diags(src: &str) -> (Vec<Token>, Vec<Trivia>, Vec<LexDiagKind>) {
+    let mut lexer = Lexer::new(src);
+    let mut tokens = Vec::new();
+
+    loop {
+        let tok = lexer.next_token();
+        tokens.push(tok);
+        if tok.kind == TokenKind::Eof {
+            break;
+        }
+    }
+
+    let trivia = lexer.take_trivia();
+    let diags = lexer
+        .take_diagnostics()
+        .into_iter()
+        .map(|diag| diag.kind)
+        .collect();
+
+    (tokens, trivia, diags)
 }
 
 #[test]
@@ -48,6 +106,70 @@ fn lexes_comment() {
 }
 
 #[test]
+fn captures_comment_only_line() {
+    let src = "# hello\nx = 1";
+    let (tokens, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert_eq!(trivia.len(), 1);
+    assert_eq!(trivia[0].span.slice(src), "# hello");
+    assert_eq!(trivia[0].precedes_token, 0);
+    assert_eq!(tokens[0].kind, TokenKind::Newline);
+}
+
+#[test]
+fn captures_inline_comment() {
+    let src = "x = 1 # comment\n";
+    let (tokens, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert_eq!(trivia.len(), 1);
+    assert_eq!(trivia[0].span.slice(src), "# comment");
+    assert_eq!(trivia[0].precedes_token, 3);
+    assert_eq!(tokens[trivia[0].precedes_token as usize].kind, TokenKind::Newline);
+}
+
+#[test]
+fn captures_inline_type_comment() {
+    let src = "x = 1  # type: int\n";
+    let (tokens, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert_eq!(trivia.len(), 1);
+    assert_eq!(trivia[0].span.slice(src), "# type: int");
+    assert!(!trivia[0].is_type_ignore(src));
+    assert!(trivia[0].is_type_comment(src));
+    assert_eq!(tokens[trivia[0].precedes_token as usize].kind, TokenKind::Newline);
+}
+
+#[test]
+fn captures_comment_at_eof() {
+    let src = "x = 1 # comment";
+    let (tokens, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert_eq!(trivia.len(), 1);
+    assert_eq!(trivia[0].span.slice(src), "# comment");
+    assert_eq!(trivia[0].precedes_token, 3);
+    assert_eq!(tokens[trivia[0].precedes_token as usize].kind, TokenKind::Eof);
+}
+
+#[test]
+fn captures_comment_before_crlf_newline() {
+    let src = "x = 1 # comment\r\n";
+    let (tokens, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert_eq!(trivia.len(), 1);
+    assert_eq!(trivia[0].span.slice(src), "# comment");
+    assert_eq!(tokens[trivia[0].precedes_token as usize].kind, TokenKind::Newline);
+}
+
+#[test]
+fn tracks_next_token_index_for_comment_attachment() {
+    let src = "x = 1 # comment";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert_eq!(trivia.len(), 1);
+    assert_eq!(trivia[0].precedes_token, 3);
+}
+
+#[test]
 fn lexes_fstring_simple() {
     let kinds = lex_kinds("x = 10\nprint(f\"this is {x}\")");
     assert_eq!(
@@ -59,11 +181,324 @@ fn lexes_fstring_simple() {
             TokenKind::Newline,
             TokenKind::Name,
             TokenKind::LeftParen,
-            TokenKind::FString,
+            TokenKind::FStringStart,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
             TokenKind::RightParen,
             TokenKind::Eof,
         ]
     )
+}
+
+#[test]
+fn does_not_capture_hash_inside_fstring_text() {
+    let src = "f'# not comment {x}'";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert!(trivia.is_empty());
+}
+
+#[test]
+fn does_not_capture_hash_inside_double_quoted_fstring_text() {
+    let src = "f\"# not trivia\"";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert!(trivia.is_empty());
+}
+
+#[test]
+fn captures_comment_inside_fstring_expr() {
+    let src = "f'''{x # comment\n}'''";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert_eq!(trivia.len(), 1);
+    assert_eq!(trivia[0].span.slice(src), "# comment");
+}
+
+#[test]
+fn detects_type_ignore_comment() {
+    let src = "# type: ignore";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert!(trivia[0].is_type_ignore(src));
+    assert!(!trivia[0].is_type_comment(src));
+}
+
+#[test]
+fn detects_spaced_type_ignore_comment() {
+    let src = "#    type: ignore";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert!(trivia[0].is_type_ignore(src));
+    assert!(!trivia[0].is_type_comment(src));
+}
+
+#[test]
+fn detects_bracketed_type_ignore_comment() {
+    let src = "# type: ignore[attr-defined]";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert!(trivia[0].is_type_ignore(src));
+    assert!(!trivia[0].is_type_comment(src));
+}
+
+#[test]
+fn detects_type_comment() {
+    let src = "# type: int";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert!(!trivia[0].is_type_ignore(src));
+    assert!(trivia[0].is_type_comment(src));
+}
+
+#[test]
+fn rejects_non_type_comment() {
+    let src = "# not a type: comment";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert!(!trivia[0].is_type_ignore(src));
+    assert!(!trivia[0].is_type_comment(src));
+}
+
+#[test]
+fn rejects_empty_type_comment() {
+    let src = "# type:";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert!(!trivia[0].is_type_ignore(src));
+    assert!(!trivia[0].is_type_comment(src));
+}
+
+#[test]
+fn rejects_whitespace_only_type_comment() {
+    let src = "# type:   ";
+    let (_, trivia, _) = lex_tokens_trivia_and_diags(src);
+
+    assert!(!trivia[0].is_type_ignore(src));
+    assert!(!trivia[0].is_type_comment(src));
+}
+
+#[test]
+fn lexes_fstring_conversion_tokens() {
+    let (tokens, diags) = lex_tokens_and_diags("f\"{x!r}\"");
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Exclamation,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+    assert!(diags.is_empty());
+}
+
+#[test]
+fn lexes_fstring_format_spec_text_as_middle() {
+    let kinds = lex_kinds("f\"{x:.2f}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Colon,
+            TokenKind::FStringMiddle,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn lexes_fstring_conversion_then_format_spec() {
+    let kinds = lex_kinds("f\"{x!r:>10}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Exclamation,
+            TokenKind::Name,
+            TokenKind::Colon,
+            TokenKind::FStringMiddle,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn lexes_nested_expressions_inside_format_spec() {
+    let kinds = lex_kinds("f\"{x:{width}.{precision}f}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Colon,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringMiddle,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn lexes_fstring_debug_equal_before_format_spec() {
+    let kinds = lex_kinds("f\"{x=:.2f}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Equal,
+            TokenKind::Colon,
+            TokenKind::FStringMiddle,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn lexes_fstring_debug_equal_without_format_spec() {
+    let kinds = lex_kinds("f\"{x=}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Equal,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn repeated_fstring_exclamation_tokens_are_left_for_parser() {
+    let (tokens, diags) = lex_tokens_and_diags("f\"{x!!r}\"");
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Exclamation,
+            TokenKind::Exclamation,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+    assert!(diags.is_empty());
+}
+
+#[test]
+fn repeated_fstring_conversion_markers_are_left_for_parser() {
+    let (tokens, diags) = lex_tokens_and_diags("f\"{x!r!s}\"");
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Exclamation,
+            TokenKind::Name,
+            TokenKind::Exclamation,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+    assert!(diags.is_empty());
+}
+
+#[test]
+fn top_level_fstring_markers_do_not_override_nested_expression_tokens() {
+    let kinds = lex_kinds("f\"{ {'a': 1} == y}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::LeftBrace,
+            TokenKind::String,
+            TokenKind::Colon,
+            TokenKind::Number,
+            TokenKind::RightBrace,
+            TokenKind::EqualEqual,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn fstring_nested_not_equal_remains_normal_expression_token() {
+    let kinds = lex_kinds("f\"{x != y}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::NotEqual,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn fstring_nested_bare_exclamation_stays_invalid() {
+    let (tokens, diags) = lex_tokens_and_diags("f\"{foo(!x)}\"");
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::LeftParen,
+            TokenKind::Illegal,
+            TokenKind::Name,
+            TokenKind::RightParen,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(diags, vec![LexDiagKind::UnexpectedCharacter]);
 }
 
 #[test]
@@ -108,8 +543,9 @@ fn lexes_mixed_indentation() {
             TokenKind::Name,
             TokenKind::Colon,
             TokenKind::Newline,
-            TokenKind::Illegal,
+            TokenKind::Indent,
             TokenKind::Pass,
+            TokenKind::Dedent,
             TokenKind::Eof,
         ]
     )
@@ -131,10 +567,11 @@ fn lexes_hex_binary_octal_numbers() {
 
 #[test]
 fn lexes_float_numbers() {
-    let kinds = lex_kinds("3.14 0.5 10.0");
+    let kinds = lex_kinds("3.14 0.5 10.0 .5");
     assert_eq!(
         kinds,
         vec![
+            TokenKind::Number,
             TokenKind::Number,
             TokenKind::Number,
             TokenKind::Number,
@@ -189,12 +626,30 @@ fn lexes_multiline_strings() {
 }
 
 #[test]
+fn lexes_triple_string_with_internal_quote_candidates() {
+    let kinds = lex_kinds("\"\"\"a\"b\"\"c\"\"\"");
+    assert_eq!(kinds, vec![TokenKind::String, TokenKind::Eof]);
+}
+
+#[test]
+fn triple_string_ignores_escaped_triple_quote() {
+    let kinds = lex_kinds("\"\"\"abc \\\"\\\"\\\" def\"\"\"");
+    assert_eq!(kinds, vec![TokenKind::String, TokenKind::Eof]);
+}
+
+#[test]
 fn lexes_raw_multiline_strings() {
     let kinds = lex_kinds("r'''raw\ntriple''' r\"\"\"raw triple\"\"\"");
     assert_eq!(
         kinds,
         vec![TokenKind::String, TokenKind::String, TokenKind::Eof,]
     )
+}
+
+#[test]
+fn lexes_raw_triple_string_with_escaped_quote_candidates() {
+    let kinds = lex_kinds("r\"\"\"keep \\\"\" not closed yet \"\"\"");
+    assert_eq!(kinds, vec![TokenKind::String, TokenKind::Eof]);
 }
 
 #[test]
@@ -273,7 +728,7 @@ fn lexes_other_operators() {
             TokenKind::At,
             TokenKind::AtEqual,
             TokenKind::Ellipsis,
-            TokenKind::Exclamation,
+            TokenKind::Illegal,
             TokenKind::Eof,
         ]
     )
@@ -503,14 +958,387 @@ fn lexes_fstring_with_raw() {
     let kinds = lex_kinds("f'value: {x}' fr'raw: {y}'");
     assert_eq!(
         kinds,
-        vec![TokenKind::FString, TokenKind::FString, TokenKind::Eof,]
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::FStringStart,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
     )
 }
 
 #[test]
 fn lexes_fstring_triple_quoted() {
     let kinds = lex_kinds("f'''multi\nline {x}'''");
-    assert_eq!(kinds, vec![TokenKind::FString, TokenKind::Eof,])
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    )
+}
+
+#[test]
+fn lexes_tstring_with_raw() {
+    let kinds = lex_kinds("t'value: {x}' tr'raw: {y}' rt'more: {z}'");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::TStringStart,
+            TokenKind::TStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::TStringEnd,
+            TokenKind::TStringStart,
+            TokenKind::TStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::TStringEnd,
+            TokenKind::TStringStart,
+            TokenKind::TStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::TStringEnd,
+            TokenKind::Eof,
+        ]
+    )
+}
+
+#[test]
+fn lexes_interpolated_double_left_brace_split() {
+    let kinds = lex_kinds("f'{{x}'");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::FStringMiddle,
+            TokenKind::Illegal,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    )
+}
+
+#[test]
+fn lexes_interpolated_double_right_brace_as_text() {
+    let kinds = lex_kinds("f'{x}}}'");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringMiddle,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    )
+}
+
+#[test]
+fn interpolated_string_tokens_have_expected_spans() {
+    let src = "f\"this is {x}\"";
+    let tokens = lex_tokens(src);
+
+    assert_eq!(tokens[0].kind, TokenKind::FStringStart);
+    assert_eq!(tokens[0].span.slice(src), "f\"");
+
+    assert_eq!(tokens[1].kind, TokenKind::FStringMiddle);
+    assert_eq!(tokens[1].span.slice(src), "this is ");
+
+    assert_eq!(tokens[2].kind, TokenKind::LeftBrace);
+    assert_eq!(tokens[2].span.slice(src), "{");
+
+    assert_eq!(tokens[3].kind, TokenKind::Name);
+    assert_eq!(tokens[3].span.slice(src), "x");
+
+    assert_eq!(tokens[4].kind, TokenKind::RightBrace);
+    assert_eq!(tokens[4].span.slice(src), "}");
+
+    assert_eq!(tokens[5].kind, TokenKind::FStringEnd);
+    assert_eq!(tokens[5].span.slice(src), "\"");
+}
+
+#[test]
+fn interpolated_double_left_brace_split_has_expected_spans() {
+    let src = "f'{{x}'";
+    let tokens = lex_tokens(src);
+
+    assert_eq!(tokens[0].kind, TokenKind::FStringStart);
+    assert_eq!(tokens[0].span.slice(src), "f'");
+
+    assert_eq!(tokens[1].kind, TokenKind::FStringMiddle);
+    assert_eq!(tokens[1].span.slice(src), "{{x");
+
+    assert_eq!(tokens[2].kind, TokenKind::Illegal);
+    assert_eq!(tokens[2].span.slice(src), "}");
+
+    assert_eq!(tokens[3].kind, TokenKind::FStringEnd);
+    assert_eq!(tokens[3].span.slice(src), "'");
+}
+
+#[test]
+fn interpolated_double_right_brace_text_has_expected_spans() {
+    let src = "f'{x}}}'";
+    let tokens = lex_tokens(src);
+
+    assert_eq!(tokens[0].kind, TokenKind::FStringStart);
+    assert_eq!(tokens[0].span.slice(src), "f'");
+
+    assert_eq!(tokens[1].kind, TokenKind::LeftBrace);
+    assert_eq!(tokens[1].span.slice(src), "{");
+
+    assert_eq!(tokens[2].kind, TokenKind::Name);
+    assert_eq!(tokens[2].span.slice(src), "x");
+
+    assert_eq!(tokens[3].kind, TokenKind::RightBrace);
+    assert_eq!(tokens[3].span.slice(src), "}");
+
+    assert_eq!(tokens[4].kind, TokenKind::FStringMiddle);
+    assert_eq!(tokens[4].span.slice(src), "}}");
+
+    assert_eq!(tokens[5].kind, TokenKind::FStringEnd);
+    assert_eq!(tokens[5].span.slice(src), "'");
+}
+
+#[test]
+fn lexes_interpolated_expr_with_nested_delimiters() {
+    let kinds = lex_kinds("f\"{foo({1: [x]})}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::LeftParen,
+            TokenKind::LeftBrace,
+            TokenKind::Number,
+            TokenKind::Colon,
+            TokenKind::LeftBracket,
+            TokenKind::Name,
+            TokenKind::RightBracket,
+            TokenKind::RightBrace,
+            TokenKind::RightParen,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    )
+}
+
+#[test]
+fn raw_single_line_string_rejects_newline() {
+    let (tokens, diags) = lex_tokens_and_diags("r'hello\nworld'");
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::UnterminatedString,
+            TokenKind::Newline,
+            TokenKind::Name,
+            TokenKind::UnterminatedString,
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        diags,
+        vec![
+            LexDiagKind::UnterminatedString,
+            LexDiagKind::UnterminatedString
+        ]
+    );
+}
+
+#[test]
+fn raw_single_line_fstring_rejects_newline_in_text() {
+    let (tokens, diags) = lex_tokens_and_diags("fr'hello\n{x}'");
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::UnterminatedString,
+            TokenKind::Newline,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::UnterminatedString,
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        diags,
+        vec![
+            LexDiagKind::UnterminatedString,
+            LexDiagKind::UnterminatedString
+        ]
+    );
+}
+
+#[test]
+fn non_triple_fstring_rejects_newline_in_expr() {
+    let (tokens, diags) = lex_tokens_and_diags("f'{x\n}'");
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::UnterminatedString,
+            TokenKind::Newline,
+            TokenKind::RightBrace,
+            TokenKind::UnterminatedString,
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        diags,
+        vec![
+            LexDiagKind::UnterminatedFstring,
+            LexDiagKind::UnterminatedString,
+        ]
+    );
+}
+
+#[test]
+fn triple_fstring_allows_newline_in_expr() {
+    let kinds = lex_kinds("f'''{x\n}'''");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Newline,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn triple_fstring_newline_does_not_trigger_outer_indent_state() {
+    let kinds = lex_kinds("if x:\n    y = f'''{foo\n}'''\n    z = 1\n");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::If,
+            TokenKind::Name,
+            TokenKind::Colon,
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Name,
+            TokenKind::Equal,
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Newline,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Newline,
+            TokenKind::Name,
+            TokenKind::Equal,
+            TokenKind::Number,
+            TokenKind::Newline,
+            TokenKind::Dedent,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn nested_interpolated_string_does_not_clobber_outer_expr_mode() {
+    let kinds = lex_kinds("f\"{f'{x}' + y}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Plus,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn nested_interpolated_string_preserves_outer_delimiter_stack() {
+    let kinds = lex_kinds("f\"{(f'{x}', y)}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::LeftParen,
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Comma,
+            TokenKind::Name,
+            TokenKind::RightParen,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn malformed_numbers_remain_single_tokens() {
+    let (tokens, diags) = lex_tokens_and_diags("0b102 0x1g 1e+ 0123");
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::Number,
+            TokenKind::Number,
+            TokenKind::Number,
+            TokenKind::Number,
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        tokens[..4]
+            .iter()
+            .map(|tok| tok.span.slice("0b102 0x1g 1e+ 0123"))
+            .collect::<Vec<_>>(),
+        vec!["0b102", "0x1g", "1e+", "0123"]
+    );
+    assert_eq!(
+        diags,
+        vec![
+            LexDiagKind::InvalidNumber,
+            LexDiagKind::InvalidNumber,
+            LexDiagKind::InvalidNumber,
+            LexDiagKind::InvalidNumber,
+        ]
+    );
 }
 
 #[test]
@@ -575,4 +1403,127 @@ fn lexes_underscore_identifiers() {
             TokenKind::Eof,
         ]
     )
+}
+
+#[test]
+fn lexes_unicode_identifier() {
+    let kinds = lex_kinds("π = 3");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Name,
+            TokenKind::Equal,
+            TokenKind::Number,
+            TokenKind::Eof,
+        ]
+    )
+}
+
+#[test]
+fn lexes_non_latin_identifier() {
+    let kinds = lex_kinds("变量 = 1");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Name,
+            TokenKind::Equal,
+            TokenKind::Number,
+            TokenKind::Eof,
+        ]
+    )
+}
+
+#[test]
+fn lexes_mixed_unicode_identifier() {
+    let kinds = lex_kinds("café = 1");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Name,
+            TokenKind::Equal,
+            TokenKind::Number,
+            TokenKind::Eof,
+        ]
+    )
+}
+
+#[test]
+fn lexes_unicode_identifier_inside_fstring_expr() {
+    let kinds = lex_kinds("f\"{变量}\"");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn unicode_identifier_span_is_byte_correct() {
+    let src = "π_value = 3";
+    let tokens = lex_tokens(src);
+
+    assert_eq!(tokens[0].kind, TokenKind::Name);
+    assert_eq!(tokens[0].span.slice(src), "π_value");
+}
+
+#[test]
+fn emoji_is_not_identifier_start() {
+    let (tokens, diags) = lex_tokens_and_diags("😀 = 1");
+    assert_eq!(tokens[0].kind, TokenKind::Illegal);
+    assert_eq!(tokens[0].span.slice("😀 = 1"), "😀");
+    assert_eq!(diags, vec![LexDiagKind::UnexpectedCharacter]);
+}
+
+#[test]
+fn lexes_backslash_line_continuation() {
+    let kinds = lex_kinds("x = 1 + \\\n    2");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Name,
+            TokenKind::Equal,
+            TokenKind::Number,
+            TokenKind::Plus,
+            TokenKind::Number,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn lexes_backslash_line_continuation_with_crlf() {
+    let kinds = lex_kinds("x = 1 + \\\r\n    2");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Name,
+            TokenKind::Equal,
+            TokenKind::Number,
+            TokenKind::Plus,
+            TokenKind::Number,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn lexes_backslash_crlf_line_continuation() {
+    let kinds = lex_kinds("x = 1 + \\\r\n    2");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Name,
+            TokenKind::Equal,
+            TokenKind::Number,
+            TokenKind::Plus,
+            TokenKind::Number,
+            TokenKind::Eof,
+        ]
+    );
 }
