@@ -376,6 +376,32 @@ fn lexes_nested_expressions_inside_format_spec() {
 }
 
 #[test]
+fn lexes_nested_format_spec_with_inner_format_spec() {
+    let (tokens, diags) = lex_tokens_and_diags("f\"{x: .{precision:d}f}\"");
+
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Colon,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::Colon,
+            TokenKind::FStringMiddle,
+            TokenKind::RightBrace,
+            TokenKind::FStringMiddle,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+    assert!(diags.is_empty());
+}
+
+#[test]
 fn lexes_fstring_debug_equal_before_format_spec() {
     let kinds = lex_kinds("f\"{x=:.2f}\"");
     assert_eq!(
@@ -650,6 +676,12 @@ fn triple_string_ignores_escaped_triple_quote() {
 }
 
 #[test]
+fn triple_string_closes_after_backslash() {
+    let kinds = lex_kinds("\"\"\"abc \\\"\"\"");
+    assert_eq!(kinds, vec![TokenKind::String, TokenKind::Eof]);
+}
+
+#[test]
 fn lexes_raw_multiline_strings() {
     let kinds = lex_kinds("r'''raw\ntriple''' r\"\"\"raw triple\"\"\"");
     assert_eq!(
@@ -661,6 +693,12 @@ fn lexes_raw_multiline_strings() {
 #[test]
 fn lexes_raw_triple_string_with_escaped_quote_candidates() {
     let kinds = lex_kinds("r\"\"\"keep \\\"\" not closed yet \"\"\"");
+    assert_eq!(kinds, vec![TokenKind::String, TokenKind::Eof]);
+}
+
+#[test]
+fn raw_triple_string_closes_after_backslash() {
+    let kinds = lex_kinds("r\"\"\"abc \\\"\"\"");
     assert_eq!(kinds, vec![TokenKind::String, TokenKind::Eof]);
 }
 
@@ -989,6 +1027,64 @@ fn lexes_fstring_with_raw() {
 }
 
 #[test]
+fn non_raw_fstring_text_keeps_escaped_quote() {
+    let (tokens, diags) = lex_tokens_and_diags(r#"f"prefix \" value {x}""#);
+
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+    assert!(diags.is_empty());
+}
+
+#[test]
+fn raw_fstring_text_keeps_backslash_quote_sequence() {
+    let (tokens, diags) = lex_tokens_and_diags(r#"rf"prefix \" value {x}""#);
+
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+    assert!(diags.is_empty());
+}
+
+#[test]
+fn raw_fstring_regex_from_pandas_script_lexes() {
+    let (tokens, diags) = lex_tokens_and_diags(r#"rf"\b{word}\b""#);
+
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringMiddle,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+    assert!(diags.is_empty());
+}
+
+#[test]
 fn lexes_fstring_triple_quoted() {
     let kinds = lex_kinds("f'''multi\nline {x}'''");
     assert_eq!(
@@ -1003,6 +1099,83 @@ fn lexes_fstring_triple_quoted() {
             TokenKind::Eof,
         ]
     )
+}
+
+#[test]
+fn lexes_multiline_triple_fstring_from_pandas_script() {
+    let src = concat!(
+        "f\"\"\"{filename}:{line_number}:{err_msg} \"{title}\" to \"{\n",
+        "    correct_title_capitalization(title)\n",
+        "}\" \"\"\"",
+    );
+    let (tokens, diags) = lex_tokens_and_diags(src);
+
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::FStringStart,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Name,
+            TokenKind::RightBrace,
+            TokenKind::FStringMiddle,
+            TokenKind::LeftBrace,
+            TokenKind::Newline,
+            TokenKind::Name,
+            TokenKind::LeftParen,
+            TokenKind::Name,
+            TokenKind::RightParen,
+            TokenKind::Newline,
+            TokenKind::RightBrace,
+            TokenKind::FStringMiddle,
+            TokenKind::FStringEnd,
+            TokenKind::Eof,
+        ]
+    );
+    assert!(diags.is_empty());
+}
+
+#[test]
+fn lexes_tail_of_pandas_validation_script() {
+    let src = concat!(
+        "number_of_errors: int = 0\n\n",
+        "for filename in source_paths:\n",
+        "    for title, line_number in find_titles(filename):\n",
+        "        if title != correct_title_capitalization(title):\n",
+        "            print(\n",
+        "                f\"\"\"{filename}:{line_number}:{err_msg} \"{title}\" to \"{\n",
+        "                    correct_title_capitalization(title)\n",
+        "                }\" \"\"\"\n",
+        "            )\n",
+        "            number_of_errors += 1\n\n",
+        "    return number_of_errors\n\n\n",
+        "if __name__ == \"__main__\":\n",
+        "    parser = argparse.ArgumentParser(description=\"Validate heading capitalization\")\n\n",
+        "    parser.add_argument(\n",
+        "        \"paths\", nargs=\"*\", help=\"Source paths of file/directory to check.\"\n",
+        "    )\n\n",
+        "    args = parser.parse_args()\n\n",
+        "    sys.exit(main(args.paths))\n",
+    );
+    let (tokens, diags) = lex_tokens_and_diags(src);
+
+    assert_eq!(tokens.last().unwrap().kind, TokenKind::Eof);
+    assert!(
+        diags.is_empty(),
+        "diags={diags:?} kinds={:?}",
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -1346,6 +1519,54 @@ fn malformed_numbers_remain_single_tokens() {
         diags,
         vec![
             LexDiagKind::InvalidNumber,
+            LexDiagKind::InvalidNumber,
+            LexDiagKind::InvalidNumber,
+            LexDiagKind::InvalidNumber,
+        ]
+    );
+}
+
+#[test]
+fn all_zero_prefixed_decimals_are_valid() {
+    let (tokens, diags) = lex_tokens_and_diags("0 00 000 0_0 00_0");
+
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::Number,
+            TokenKind::Number,
+            TokenKind::Number,
+            TokenKind::Number,
+            TokenKind::Number,
+            TokenKind::Eof,
+        ]
+    );
+    assert!(diags.is_empty());
+}
+
+#[test]
+fn nonzero_digits_after_leading_zero_are_invalid() {
+    let (tokens, diags) = lex_tokens_and_diags("01 0123 00_1");
+
+    assert_eq!(
+        tokens.iter().map(|tok| tok.kind).collect::<Vec<_>>(),
+        vec![
+            TokenKind::Number,
+            TokenKind::Number,
+            TokenKind::Number,
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        tokens[..3]
+            .iter()
+            .map(|tok| tok.span.slice("01 0123 00_1"))
+            .collect::<Vec<_>>(),
+        vec!["01", "0123", "00_1"]
+    );
+    assert_eq!(
+        diags,
+        vec![
             LexDiagKind::InvalidNumber,
             LexDiagKind::InvalidNumber,
             LexDiagKind::InvalidNumber,
