@@ -86,6 +86,7 @@ enum Mode {
         quote: u8,
         triple: bool,
         raw: bool,
+        return_to: ExprReturn,
     },
     InterpolatedExpr {
         kind: InterpolatedKind,
@@ -225,6 +226,7 @@ impl<'src> Lexer<'src> {
                 quote: u8,
                 triple: bool,
                 raw: bool,
+                return_to: ExprReturn,
             },
             InterpolatedExpr {
                 kind: InterpolatedKind,
@@ -254,11 +256,13 @@ impl<'src> Lexer<'src> {
                 quote,
                 triple,
                 raw,
+                return_to,
             }) => NextMode::InterpolatedFormatSpec {
                 kind: *kind,
                 quote: *quote,
                 triple: *triple,
                 raw: *raw,
+                return_to: *return_to,
             },
             Some(Mode::InterpolatedExpr {
                 kind,
@@ -291,7 +295,8 @@ impl<'src> Lexer<'src> {
                 quote,
                 triple,
                 raw,
-            } => self.next_interpolated_format_spec_token(kind, quote, triple, raw),
+                return_to,
+            } => self.next_interpolated_format_spec_token(kind, quote, triple, raw, return_to),
             NextMode::InterpolatedExpr {
                 kind,
                 quote,
@@ -806,10 +811,7 @@ impl<'src> Lexer<'src> {
             };
 
             self.pos += offset;
-            if self.peek(1) == quote
-                && self.peek(2) == quote
-                && !self.has_odd_trailing_backslashes_before(self.pos)
-            {
+            if self.peek(1) == quote && self.peek(2) == quote {
                 self.bump();
                 self.bump();
                 self.bump();
@@ -940,12 +942,12 @@ impl<'src> Lexer<'src> {
                     );
                 }
                 b'0'..=b'9' | b'_' => {
-                    self.bump();
-                    self.consume_number_tail();
+                    let mut zero_prefixed_invalid = self.scan_zero_prefixed_decimal_integer();
                     if matches!(self.current(), b'.' | b'e' | b'E' | b'j' | b'J') {
                         if self.current() == b'.' {
                             self.bump();
-                            let _ = self.scan_digits_with_underscores_dec();
+                            let (_, bad_frac) = self.scan_digits_with_underscores_dec();
+                            zero_prefixed_invalid |= bad_frac;
                         }
 
                         if matches!(self.current(), b'e' | b'E') {
@@ -953,7 +955,13 @@ impl<'src> Lexer<'src> {
                             if matches!(self.current(), b'+' | b'-') {
                                 self.bump();
                             }
-                            let _ = self.scan_digits_with_underscores_dec();
+
+                            let (saw_exp_digit, bad_exp) = self.scan_digits_with_underscores_dec();
+                            if !saw_exp_digit {
+                                zero_prefixed_invalid = true;
+                            } else {
+                                zero_prefixed_invalid |= bad_exp;
+                            }
                         }
 
                         if matches!(self.current(), b'j' | b'J') {
@@ -961,7 +969,10 @@ impl<'src> Lexer<'src> {
                         }
                     }
 
-                    self.push_diag(LexDiagKind::InvalidNumber, start, self.pos as u32);
+                    if zero_prefixed_invalid {
+                        self.consume_number_tail();
+                        self.push_diag(LexDiagKind::InvalidNumber, start, self.pos as u32);
+                    }
                     return Token::new(TokenKind::Number, start, self.pos as u32);
                 }
                 _ => {}
@@ -1085,10 +1096,7 @@ impl<'src> Lexer<'src> {
             };
 
             self.pos += offset;
-            if self.peek(1) == quote
-                && self.peek(2) == quote
-                && !self.has_odd_trailing_backslashes_before(self.pos)
-            {
+            if self.peek(1) == quote && self.peek(2) == quote {
                 self.bump();
                 self.bump();
                 self.bump();
@@ -1097,6 +1105,44 @@ impl<'src> Lexer<'src> {
 
             self.bump();
         }
+    }
+
+    fn scan_zero_prefixed_decimal_integer(&mut self) -> bool {
+        debug_assert!(self.current() == b'0');
+
+        self.bump();
+
+        let mut invalid = false;
+        let mut prev_underscore = false;
+        let mut saw_nonzero_digit = false;
+
+        loop {
+            match self.current() {
+                b'0' => {
+                    prev_underscore = false;
+                    self.bump();
+                }
+                b'1'..=b'9' => {
+                    saw_nonzero_digit = true;
+                    prev_underscore = false;
+                    self.bump();
+                }
+                b'_' => {
+                    if prev_underscore {
+                        invalid = true;
+                    }
+                    prev_underscore = true;
+                    self.bump();
+                }
+                _ => break,
+            }
+        }
+
+        if prev_underscore {
+            invalid = true;
+        }
+
+        invalid || saw_nonzero_digit
     }
 
     fn scan_prefixed_string(&mut self, prefix: StringPrefix) -> Token {
@@ -1352,7 +1398,11 @@ impl<'src> Lexer<'src> {
             }
 
             if triple {
-                if b == quote && self.peek(1) == quote && self.peek(2) == quote {
+                if b == quote
+                    && self.peek(1) == quote
+                    && self.peek(2) == quote
+                    && !self.has_odd_trailing_backslashes_before(self.pos)
+                {
                     if self.pos > start as usize {
                         return Token::new(
                             self.interpolated_middle_kind(kind),
@@ -1372,7 +1422,7 @@ impl<'src> Lexer<'src> {
                     );
                 }
             } else {
-                if b == quote {
+                if b == quote && !self.has_odd_trailing_backslashes_before(self.pos) {
                     if self.pos > start as usize {
                         return Token::new(
                             self.interpolated_middle_kind(kind),
@@ -1418,6 +1468,7 @@ impl<'src> Lexer<'src> {
         quote: u8,
         triple: bool,
         raw: bool,
+        return_to: ExprReturn,
     ) -> Token {
         let start = self.pos as u32;
 
@@ -1472,12 +1523,19 @@ impl<'src> Lexer<'src> {
                 }
 
                 self.bump();
-                *self.mode_stack.last_mut().unwrap() = Mode::InterpolatedText {
-                    kind,
-                    quote,
-                    triple,
-                    raw,
-                };
+                match return_to {
+                    ExprReturn::Text => {
+                        *self.mode_stack.last_mut().unwrap() = Mode::InterpolatedText {
+                            kind,
+                            quote,
+                            triple,
+                            raw,
+                        };
+                    }
+                    ExprReturn::FormatSpec => {
+                        self.mode_stack.pop();
+                    }
+                }
                 return Token::new(TokenKind::RightBrace, start, self.pos as u32);
             }
 
@@ -1685,6 +1743,10 @@ impl<'src> Lexer<'src> {
             return Token::new(TokenKind::UnterminatedString, start, self.pos as u32);
         }
 
+        if self.interpolated_expr_brace_stack_empty(expr_index) {
+            self.skip_horizontal_ws();
+        }
+
         if self.current() == b'}' && self.interpolated_expr_brace_stack_empty(expr_index) {
             self.bump();
             self.resume_interpolated_expr_target(expr_index, kind, quote, triple, raw);
@@ -1702,12 +1764,20 @@ impl<'src> Lexer<'src> {
 
             if self.current() == b':' && self.peek(1) != b'=' {
                 self.bump();
+                let return_to = match self.mode_stack.get(expr_index) {
+                    Some(Mode::InterpolatedExpr { return_to, .. }) => *return_to,
+                    _ => {
+                        self.push_diag(LexDiagKind::InvalidFstring, start, start);
+                        return Token::new(TokenKind::Illegal, start, start);
+                    }
+                };
                 if let Some(slot) = self.mode_stack.get_mut(expr_index) {
                     *slot = Mode::InterpolatedFormatSpec {
                         kind,
                         quote,
                         triple,
                         raw,
+                        return_to,
                     };
                 }
                 return Token::new(TokenKind::Colon, start, self.pos as u32);
