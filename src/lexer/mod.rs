@@ -475,7 +475,11 @@ impl<'src> Lexer<'src> {
         debug_assert!(self.pos < self.len);
         debug_assert!(!self.current().is_ascii());
 
-        unsafe { std::str::from_utf8_unchecked(&self.bytes[self.pos..]).chars().next() }
+        unsafe {
+            std::str::from_utf8_unchecked(&self.bytes[self.pos..])
+                .chars()
+                .next()
+        }
     }
 
     #[inline]
@@ -484,7 +488,11 @@ impl<'src> Lexer<'src> {
             return None;
         }
 
-        let ch = unsafe { std::str::from_utf8_unchecked(&self.bytes[self.pos..]).chars().next() }?;
+        let ch = unsafe {
+            std::str::from_utf8_unchecked(&self.bytes[self.pos..])
+                .chars()
+                .next()
+        }?;
         self.pos += ch.len_utf8();
         Some(ch)
     }
@@ -1305,10 +1313,8 @@ impl<'src> Lexer<'src> {
                 return self.scan_identifier_or_keyword();
             }
 
-            if !b.is_ascii() {
-                if self.current_starts_identifier() {
-                    return self.scan_identifier_or_keyword();
-                }
+            if !b.is_ascii() && self.current_starts_identifier() {
+                return self.scan_identifier_or_keyword();
             }
 
             if b.is_ascii_digit() {
@@ -1686,10 +1692,8 @@ impl<'src> Lexer<'src> {
                 return ExprStep::Token(self.scan_identifier_or_keyword());
             }
 
-            if !b.is_ascii() {
-                if self.current_starts_identifier() {
-                    return ExprStep::Token(self.scan_identifier_or_keyword());
-                }
+            if !b.is_ascii() && self.current_starts_identifier() {
+                return ExprStep::Token(self.scan_identifier_or_keyword());
             }
 
             if b.is_ascii_digit() {
