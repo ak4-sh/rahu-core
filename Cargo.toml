@@ -4,3 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+memchr = "2"
+unicode-ident = "1"
+walkdir = "2"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "lexer"
+harness = false

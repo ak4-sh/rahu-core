@@ -15,10 +15,21 @@ impl Span {
     }
 
     pub fn len(self) -> u32 {
+        debug_assert!(self.start <= self.end);
         self.end - self.start
     }
-    pub fn slice<'a>(&self, input: &'a str) -> &'a str {
-        &input[self.start as usize..self.end as usize]
+
+    pub fn as_range(self) -> std::ops::Range<usize> {
+        self.start as usize..self.end as usize
+    }
+
+    pub fn slice<'a>(self, input: &'a str) -> &'a str {
+        let range = self.as_range();
+        debug_assert!(range.start <= range.end);
+        debug_assert!(range.end <= input.len());
+        debug_assert!(input.is_char_boundary(range.start));
+        debug_assert!(input.is_char_boundary(range.end));
+        &input[range]
     }
 }
 
@@ -49,7 +60,16 @@ pub enum TokenKind {
     Name,
     Number,
     String,
-    FString,
+    // f-string
+    FStringStart,
+    FStringMiddle,
+    FStringEnd,
+
+    // t-string
+    TStringStart,
+    TStringMiddle,
+    TStringEnd,
+
     BString,
 
     Newline,
@@ -112,6 +132,8 @@ pub enum TokenKind {
     Ellipsis,
     Exclamation,
 
+    Async,
+    Await,
     False,
     None,
     True,
@@ -151,71 +173,73 @@ pub enum TokenKind {
 
 impl TokenKind {
     /// Returns the keyword token kind for `s`, if `s` is a Python keyword.
-    pub fn from_keyword(s: &str) -> Option<Self> {
+    pub fn from_keyword(s: &[u8]) -> Option<Self> {
         match s {
-            "False" => Some(Self::False),
-            "None" => Some(Self::None),
-            "True" => Some(Self::True),
-            "and" => Some(Self::And),
-            "or" => Some(Self::Or),
-            "not" => Some(Self::Not),
-            "in" => Some(Self::In),
-            "is" => Some(Self::Is),
-            "if" => Some(Self::If),
-            "elif" => Some(Self::Elif),
-            "else" => Some(Self::Else),
-            "for" => Some(Self::For),
-            "while" => Some(Self::While),
-            "break" => Some(Self::Break),
-            "continue" => Some(Self::Continue),
-            "pass" => Some(Self::Pass),
-            "def" => Some(Self::Def),
-            "class" => Some(Self::Class),
-            "return" => Some(Self::Return),
-            "import" => Some(Self::Import),
-            "from" => Some(Self::From),
-            "as" => Some(Self::As),
-            "try" => Some(Self::Try),
-            "except" => Some(Self::Except),
-            "finally" => Some(Self::Finally),
-            "raise" => Some(Self::Raise),
-            "with" => Some(Self::With),
-            "lambda" => Some(Self::Lambda),
-            "assert" => Some(Self::Assert),
-            "global" => Some(Self::Global),
-            "nonlocal" => Some(Self::Nonlocal),
-            "del" => Some(Self::Del),
-            "yield" => Some(Self::Yield),
+            b"False" => Some(Self::False),
+            b"None" => Some(Self::None),
+            b"True" => Some(Self::True),
+            b"async" => Some(Self::Async),
+            b"await" => Some(Self::Await),
+            b"and" => Some(Self::And),
+            b"or" => Some(Self::Or),
+            b"not" => Some(Self::Not),
+            b"in" => Some(Self::In),
+            b"is" => Some(Self::Is),
+            b"if" => Some(Self::If),
+            b"elif" => Some(Self::Elif),
+            b"else" => Some(Self::Else),
+            b"for" => Some(Self::For),
+            b"while" => Some(Self::While),
+            b"break" => Some(Self::Break),
+            b"continue" => Some(Self::Continue),
+            b"pass" => Some(Self::Pass),
+            b"def" => Some(Self::Def),
+            b"class" => Some(Self::Class),
+            b"return" => Some(Self::Return),
+            b"import" => Some(Self::Import),
+            b"from" => Some(Self::From),
+            b"as" => Some(Self::As),
+            b"try" => Some(Self::Try),
+            b"except" => Some(Self::Except),
+            b"finally" => Some(Self::Finally),
+            b"raise" => Some(Self::Raise),
+            b"with" => Some(Self::With),
+            b"lambda" => Some(Self::Lambda),
+            b"assert" => Some(Self::Assert),
+            b"global" => Some(Self::Global),
+            b"nonlocal" => Some(Self::Nonlocal),
+            b"del" => Some(Self::Del),
+            b"yield" => Some(Self::Yield),
             _ => None,
         }
     }
 
-    pub fn from_single_char(c: char) -> Option<Self> {
-        match c {
-            '(' => Some(Self::LeftParen),
-            ')' => Some(Self::RightParen),
-            '[' => Some(Self::LeftBracket),
-            ']' => Some(Self::RightBracket),
-            ':' => Some(Self::Colon),
-            ',' => Some(Self::Comma),
-            ';' => Some(Self::Semicolon),
-            '+' => Some(Self::Plus),
-            '=' => Some(Self::Equal),
-            '-' => Some(Self::Minus),
-            '*' => Some(Self::Star),
-            '/' => Some(Self::Slash),
-            '|' => Some(Self::Pipe),
-            '&' => Some(Self::Ampersand),
-            '<' => Some(Self::Less),
-            '>' => Some(Self::Greater),
-            '.' => Some(Self::Dot),
-            '%' => Some(Self::Percent),
-            '{' => Some(Self::LeftBrace),
-            '}' => Some(Self::RightBrace),
-            '~' => Some(Self::Tilde),
-            '^' => Some(Self::Circumflex),
-            '@' => Some(Self::At),
-            '!' => Some(Self::Exclamation),
+    pub fn from_single_byte(b: u8) -> Option<Self> {
+        match b {
+            b'(' => Some(Self::LeftParen),
+            b')' => Some(Self::RightParen),
+            b'[' => Some(Self::LeftBracket),
+            b']' => Some(Self::RightBracket),
+            b':' => Some(Self::Colon),
+            b',' => Some(Self::Comma),
+            b';' => Some(Self::Semicolon),
+            b'+' => Some(Self::Plus),
+            b'=' => Some(Self::Equal),
+            b'-' => Some(Self::Minus),
+            b'*' => Some(Self::Star),
+            b'/' => Some(Self::Slash),
+            b'|' => Some(Self::Pipe),
+            b'&' => Some(Self::Ampersand),
+            b'<' => Some(Self::Less),
+            b'>' => Some(Self::Greater),
+            b'.' => Some(Self::Dot),
+            b'%' => Some(Self::Percent),
+            b'{' => Some(Self::LeftBrace),
+            b'}' => Some(Self::RightBrace),
+            b'~' => Some(Self::Tilde),
+            b'^' => Some(Self::Circumflex),
+            b'@' => Some(Self::At),
+            b'!' => Some(Self::Exclamation),
             _ => None,
         }
     }
@@ -248,14 +272,16 @@ impl TokenKind {
             [b':', b'=', ..] => Some((Self::ColonEqual, 2)),
             [b'^', b'=', ..] => Some((Self::CircumflexEqual, 2)),
 
-            [c, ..] => Self::from_single_char(*c as char).map(|kind| (kind, 1)),
+            [c, ..] => Self::from_single_byte(*c).map(|kind| (kind, 1)),
             [] => None,
         }
     }
     pub fn is_keyword(self) -> bool {
         matches!(
             self,
-            Self::False
+            Self::Async
+                | Self::Await
+                | Self::False
                 | Self::None
                 | Self::True
                 | Self::And
