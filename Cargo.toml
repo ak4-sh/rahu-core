@@ -1,0 +1,10 @@
+[package]
+name = "rahu-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lasso = { version = "0.7.3", features = ["multi-threaded"] }
+memchr = "2.8.0"
+rapidhash = "4.4.1"
+unicode-ident = "1.0.24"
